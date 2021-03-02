@@ -100,10 +100,7 @@ def convert_examples_to_features(examples, max_seq_length, tokenizer, has_label=
     for index, example in enumerate(examples):
         # 分类任务句首标记[CLS]
         tokens = ['[CLS]']
-        if has_label:
-            label = example.label
-        else:
-            label = None
+        label = example.label if has_label else None
         chars = tokenizer.tokenize(example.sentence)
         if not chars:  # 不可见字符导致返回空列表
             chars = ['[UNK]']
@@ -143,10 +140,9 @@ def features_to_tensor(ds_features, need_labels=True):
     ds_segment_ids = torch.tensor([f.segment_ids for f in ds_features], dtype=torch.long)
     if need_labels and ds_features[0].label is not None:
         ds_labels = torch.tensor([f.label for f in ds_features], dtype=torch.long)
-        ds_data = TensorDataset(ds_input_ids, ds_input_mask, ds_segment_ids, ds_labels)
+        return TensorDataset(ds_input_ids, ds_input_mask, ds_segment_ids, ds_labels)
     else:
-        ds_data = TensorDataset(ds_input_ids, ds_input_mask, ds_segment_ids)
-    return ds_data
+        return TensorDataset(ds_input_ids, ds_input_mask, ds_segment_ids)
 
 
 def do_predict(dataloader, model, device):
@@ -264,24 +260,29 @@ def main():
         esum += emoj[key]
     # 根据表情比例调整损失权重
     loss_weights = []
-    for key in emoj.keys():
+    for key in emoj:
         loss_weights.append(float(f'{emoj[key] * 1.0 / esum:.4f}'))
     loss_weights_sid = np.argsort(loss_weights)
     lwsize = len(loss_weights) - 1
     for i in range(len(loss_weights) // 2):
         loss_weights[loss_weights_sid[i]], loss_weights[loss_weights_sid[lwsize - i]]  \
             = loss_weights[loss_weights_sid[lwsize - i]], loss_weights[loss_weights_sid[i]]
-    
+
     # 检查输出目录中是否有可加载的checkpoint并创建模型
     os.makedirs(args.output_dir, exist_ok=True)
     ckpts = [(int(filename.split('-')[1]), filename) for filename in os.listdir(args.output_dir) if re.fullmatch('checkpoint-\d+', filename)]
-    ckpts = sorted(ckpts, key=lambda x: x[0])  
-    if args.checkpoint or ckpts:
-        if args.checkpoint:
-            model_file = args.checkpoint
-        else:
-            # 选择global step最大的checkpoint
-            model_file = os.path.join(args.output_dir, ckpts[-1][1])
+    ckpts = sorted(ckpts, key=lambda x: x[0])
+    if args.checkpoint:
+        model_file = args.checkpoint
+        logging.info('Load %s' % model_file)
+        checkpoint = torch.load(model_file, map_location='cpu')
+        global_step = checkpoint['step']
+        max_seq_length = checkpoint['max_seq_length']
+        lower_case = checkpoint['lower_case']
+        model = BertForSmooth.from_pretrained(args.bert_model_dir, state_dict=checkpoint['model_state'], loss_weights=loss_weights)
+    elif ckpts:
+        # 选择global step最大的checkpoint
+        model_file = os.path.join(args.output_dir, ckpts[-1][1])
         logging.info('Load %s' % model_file)
         checkpoint = torch.load(model_file, map_location='cpu')
         global_step = checkpoint['step']
@@ -296,7 +297,7 @@ def main():
 
     # 分词器
     tokenizer = BertTokenizer.from_pretrained(args.bert_model_dir, do_lower_case=lower_case)
-    
+
     # 数据并行划分到gpu上
     if use_gpu:
         print(f'parallel data on {torch.cuda.device_count()} gpus')

@@ -35,15 +35,18 @@ def load_corpus(expected_tags, segmentor, postager, swlist, corpus, labels):
                     if (len(line.strip()) != 0):
                         items = line.strip().split('\t')
                         words = list(segmentor.segment("".join(items[:-1]) if fname[0] != 't' else "".join(items[:])))
-                        if fname[0] != 't' and len(words) == 0:
-                            continue 
+                        if fname[0] != 't' and not words:
+                            continue
                         tags = list(postager.postag(words))
                         if fname[0] != 't':  
                             labels.append(int(items[-1]))
-                        seglist = []
-                        for i in range(len(words)):
-                            if tags[i] in expected_tags and words[i] not in swlist:
-                                seglist.append(words[i])
+                        seglist = [
+                            words[i]
+                            for i in range(len(words))
+                            if tags[i] in expected_tags
+                            and words[i] not in swlist
+                        ]
+
                         corpus.append(" ".join(seglist))
         if not os.path.exists('../output'):
             os.makedirs('../output')
