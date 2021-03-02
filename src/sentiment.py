@@ -100,10 +100,7 @@ def convert_examples_to_features(examples, max_seq_length, tokenizer, has_label=
     features = []
     for index, example in enumerate(examples):
         tokens = ['[CLS]']
-        if has_label:
-            label = example.label
-        else:
-            label = None
+        label = example.label if has_label else None
         chars = tokenizer.tokenize(example.sentence)
         if not chars:  # 不可见字符导致返回空列表
             chars = ['[UNK]']
@@ -142,10 +139,9 @@ def features_to_tensor(ds_features, need_labels=True):
     ds_segment_ids = torch.tensor([f.segment_ids for f in ds_features], dtype=torch.long)
     if need_labels and ds_features[0].label is not None:
         ds_labels = torch.tensor([f.label for f in ds_features], dtype=torch.long)
-        ds_data = TensorDataset(ds_input_ids, ds_input_mask, ds_segment_ids, ds_labels)
+        return TensorDataset(ds_input_ids, ds_input_mask, ds_segment_ids, ds_labels)
     else:
-        ds_data = TensorDataset(ds_input_ids, ds_input_mask, ds_segment_ids)
-    return ds_data
+        return TensorDataset(ds_input_ids, ds_input_mask, ds_segment_ids)
 
 
 def do_predict(dataloader, model, device):

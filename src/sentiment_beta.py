@@ -100,10 +100,7 @@ def convert_examples_to_features(examples, max_seq_length, tokenizer, has_label=
     features = []
     for index, example in enumerate(examples):
         tokens = ['[CLS]']
-        if has_label:
-            label = example.label
-        else:
-            label = None
+        label = example.label if has_label else None
         chars = tokenizer.tokenize(example.sentence)
         if not chars:  # 不可见字符导致返回空列表
             chars = ['[UNK]']
@@ -142,10 +139,9 @@ def features_to_tensor(ds_features, need_labels=True):
     ds_segment_ids = torch.tensor([f.segment_ids for f in ds_features], dtype=torch.long)
     if need_labels and ds_features[0].label is not None:
         ds_labels = torch.tensor([f.label for f in ds_features], dtype=torch.long)
-        ds_data = TensorDataset(ds_input_ids, ds_input_mask, ds_segment_ids, ds_labels)
+        return TensorDataset(ds_input_ids, ds_input_mask, ds_segment_ids, ds_labels)
     else:
-        ds_data = TensorDataset(ds_input_ids, ds_input_mask, ds_segment_ids)
-    return ds_data
+        return TensorDataset(ds_input_ids, ds_input_mask, ds_segment_ids)
 
 
 def do_predict(dataloader, model, device):
@@ -249,16 +245,21 @@ def main():
 
     if not args.do_train and not args.do_predict:
         raise ValueError("At least one of `do_train` or `do_predict` must be True.")
-    
+
     # 检查输出目录中是否有可加载的checkpoint并创建模型
     os.makedirs(args.output_dir, exist_ok=True)
     ckpts = [(int(filename.split('-')[1]), filename) for filename in os.listdir(args.output_dir) if re.fullmatch('checkpoint-\d+', filename)]
     ckpts = sorted(ckpts, key=lambda x: x[0])
-    if args.checkpoint or ckpts:
-        if args.checkpoint:
-            model_file = args.checkpoint
-        else:
-            model_file = os.path.join(args.output_dir, ckpts[-1][1])
+    if args.checkpoint:
+        model_file = args.checkpoint
+        logging.info('Load %s' % model_file)
+        checkpoint = torch.load(model_file, map_location='cpu')
+        global_step = checkpoint['step']
+        max_seq_length = checkpoint['max_seq_length']
+        lower_case = checkpoint['lower_case']
+        model = BertForSmooth.from_pretrained(args.bert_model_dir, state_dict=checkpoint['model_state'])
+    elif ckpts:
+        model_file = os.path.join(args.output_dir, ckpts[-1][1])
         logging.info('Load %s' % model_file)
         checkpoint = torch.load(model_file, map_location='cpu')
         global_step = checkpoint['step']
@@ -273,7 +274,7 @@ def main():
 
     # 分词器
     tokenizer = BertTokenizer.from_pretrained(args.bert_model_dir, do_lower_case=lower_case)
-    
+
     # 数据并行划分到gpu上
     if use_gpu:
         print(f'parallel data on {torch.cuda.device_count()} gpus')
@@ -303,9 +304,24 @@ def main():
         param_optimizer = list(model.named_parameters())
         no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
         optimizer_grouped_parameters = [
-            {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
-            {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+            {
+                'params': [
+                    p
+                    for n, p in param_optimizer
+                    if all(nd not in n for nd in no_decay)
+                ],
+                'weight_decay': 0.01,
+            },
+            {
+                'params': [
+                    p
+                    for n, p in param_optimizer
+                    if any(nd in n for nd in no_decay)
+                ],
+                'weight_decay': 0.0,
+            },
         ]
+
         optimizer = BertAdam(optimizer_grouped_parameters, lr=args.learning_rate, warmup=args.warmup_proportion,
                              t_total=num_train_steps)
 
